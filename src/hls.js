@@ -163,7 +163,7 @@ class Hls {
     this.keyLoader = new KeyLoader(this);
   }
 
-  mediaPlayEventHandler() {
+  maxBufferScaleApply() {
     if (this.firstPlayState === false) {
       this.firstPlayState = true;
       this.config.maxBufferLength = this.config.maxBufferLength * this.config.maxBufferScaleAfterPlay;
