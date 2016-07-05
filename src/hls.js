@@ -116,7 +116,6 @@ class Hls {
 
   constructor(config = {}) {
     var defaultConfig = Hls.DefaultConfig;
-    this.firstPlayState = false;
 
     if ((config.liveSyncDurationCount || config.liveMaxLatencyDurationCount) && (config.liveSyncDuration || config.liveMaxLatencyDuration)) {
       throw new Error('Illegal hls.js config: don\'t mix up liveSyncDurationCount/liveMaxLatencyDurationCount and liveSyncDuration/liveMaxLatencyDuration');
@@ -161,13 +160,22 @@ class Hls {
     this.timelineController = new config.timelineController(this);
     this.audioTrackController = new AudioTrackController(this);
     this.keyLoader = new KeyLoader(this);
+
+    this.maxBufferScaled = false;
   }
 
   maxBufferScaleApply() {
-    if (this.firstPlayState === false) {
-      this.firstPlayState = true;
-      this.config.maxBufferLength = this.config.maxBufferLength * this.config.maxBufferScaleAfterPlay;
-      this.config.maxBufferSize = this.config.maxBufferSize * this.config.maxBufferScaleAfterPlay;
+    if (this.maxBufferScaled === false) {
+      this.maxBufferScaled = true;
+
+      var newLength = this.config.maxBufferLength * this.config.maxBufferScaleAfterPlay;
+      var newSize = this.config.maxBufferSize * this.config.maxBufferScaleAfterPlay;
+
+      logger.log('changed maxBufferLength from ' + this.config.maxBufferLength + ' to ' + newLength);
+      logger.log('changed maxBufferSize from ' + this.config.maxBufferSize + ' to ' + newSize);
+
+      this.config.maxBufferLength = newLength;
+      this.config.maxBufferSize = newSize;
     }
   }
 
