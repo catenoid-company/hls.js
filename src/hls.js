@@ -57,6 +57,7 @@ class Hls {
           capLevelToPlayerSize: false,
           maxBufferLength: 30,
           maxBufferSize: 60 * 1000 * 1000,
+          maxBufferScaleAfterPlay: 1,
           maxBufferHole: 0.5,
           maxSeekHole: 2,
           seekHoleNudgeDuration : 0.01,
@@ -159,6 +160,23 @@ class Hls {
     this.timelineController = new config.timelineController(this);
     this.audioTrackController = new AudioTrackController(this);
     this.keyLoader = new KeyLoader(this);
+
+    this.maxBufferScaled = false;
+  }
+
+  maxBufferScaleApply() {
+    if (this.maxBufferScaled === false) {
+      this.maxBufferScaled = true;
+
+      var newLength = this.config.maxBufferLength * this.config.maxBufferScaleAfterPlay;
+      var newSize = this.config.maxBufferSize * this.config.maxBufferScaleAfterPlay;
+
+      logger.log('changed maxBufferLength from ' + this.config.maxBufferLength + ' to ' + newLength);
+      logger.log('changed maxBufferSize from ' + this.config.maxBufferSize + ' to ' + newSize);
+
+      this.config.maxBufferLength = newLength;
+      this.config.maxBufferSize = newSize;
+    }
   }
 
   destroy() {
