@@ -180,6 +180,7 @@ Configuration parameters could be provided to hls.js upon instantiation of `Hls`
     maxBufferLength: 30,
     maxMaxBufferLength: 600,
     maxBufferSize: 60*1000*1000,
+    maxBufferScaleAfterPlay: 1,
     maxBufferHole: 0.5,
     maxSeekHole: 2,
     seekHoleNudgeDuration: 0.01,
@@ -267,6 +268,12 @@ This is the guaranteed buffer length hls.js will try to reach, regardless of max
 (default: 60 MB)
 
 'Minimum' maximum buffer size in bytes. If buffer size upfront is bigger than this value, no fragment will be loaded.
+
+#### `maxBufferScaleAfterPlay`
+
+(default: 1)
+
+When media playback is started, multiply the value in maximum buffer size and maximum buffer length.
 
 #### `maxBufferHole`
 
