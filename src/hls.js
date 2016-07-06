@@ -102,6 +102,7 @@ class Hls {
 
   constructor(config = {}) {
     var defaultConfig = Hls.DefaultConfig;
+    this.firstPlayState = false;
 
     if ((config.liveSyncDurationCount || config.liveMaxLatencyDurationCount) && (config.liveSyncDuration || config.liveMaxLatencyDuration)) {
       throw new Error('Illegal hls.js config: don\'t mix up liveSyncDurationCount/liveMaxLatencyDurationCount and liveSyncDuration/liveMaxLatencyDuration');
@@ -162,6 +163,14 @@ class Hls {
     //this.fpsController.destroy();
     this.url = null;
     this.observer.removeAllListeners();
+  }
+
+  _vjsPlayEventHandler() {
+    if (this.firstPlayState === false) {
+      this.firstPlayState = true;
+      this.config.maxBufferLength = this.config.maxBufferLength * this.config.playAfterMaxRate;
+      this.config.maxBufferSize = this.config.maxBufferSize * this.config.playAfterMaxRate;
+    }
   }
 
   attachMedia(media) {
