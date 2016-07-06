@@ -170,6 +170,7 @@ class Hls {
       this.firstPlayState = true;
       this.config.maxBufferLength = this.config.maxBufferLength * this.config.playAfterMaxRate;
       this.config.maxBufferSize = this.config.maxBufferSize * this.config.playAfterMaxRate;
+      this.config.playAfterMaxRate = 1;
     }
   }
 
