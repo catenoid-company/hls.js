@@ -48,6 +48,7 @@ class Hls {
           capLevelToPlayerSize: false,
           maxBufferLength: 30,
           maxBufferSize: 60 * 1000 * 1000,
+          playAfterMaxRate: 1,
           maxBufferHole: 0.5,
           maxSeekHole: 2,
           seekHoleNudgeDuration : 0.01,
@@ -102,6 +103,7 @@ class Hls {
 
   constructor(config = {}) {
     var defaultConfig = Hls.DefaultConfig;
+    this.firstPlayState = false;
 
     if ((config.liveSyncDurationCount || config.liveMaxLatencyDurationCount) && (config.liveSyncDuration || config.liveMaxLatencyDuration)) {
       throw new Error('Illegal hls.js config: don\'t mix up liveSyncDurationCount/liveMaxLatencyDurationCount and liveSyncDuration/liveMaxLatencyDuration');
@@ -162,6 +164,15 @@ class Hls {
     //this.fpsController.destroy();
     this.url = null;
     this.observer.removeAllListeners();
+  }
+
+  _vjsPlayEventHandler() {
+    if (this.firstPlayState === false) {
+      this.firstPlayState = true;
+      this.config.maxBufferLength = this.config.maxBufferLength * this.config.playAfterMaxRate;
+      this.config.maxBufferSize = this.config.maxBufferSize * this.config.playAfterMaxRate;
+      this.config.playAfterMaxRate = 1;
+    }
   }
 
   attachMedia(media) {
