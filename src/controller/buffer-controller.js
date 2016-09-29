@@ -71,17 +71,20 @@ class BufferController extends EventHandler {
       ms.removeEventListener('sourceended', this.onmse);
       ms.removeEventListener('sourceclose', this.onmsc);
 
-      try {
-        // unlink MediaSource from video tag
-        this.media.src = '';
+      // Detach properly the MediaSource from the HTMLMediaElement as
+      // suggested in https://github.com/w3c/media-source/issues/53.
+      if (this.media) {
         this.media.removeAttribute('src');
-      } catch(err) {
-        logger.warn(`onMediaDetaching:${err.message} while unlinking video.src`);
+        this.media.load();
       }
+
       this.mediaSource = null;
       this.media = null;
       this.pendingTracks = null;
       this.sourceBuffer = null;
+      this.flushRange = [];
+      this.segments = [];
+      this.appended = 0;
     }
     this.onmso = this.onmse = this.onmsc = null;
     this.hls.trigger(Event.MEDIA_DETACHED);
@@ -149,6 +152,7 @@ class BufferController extends EventHandler {
       this.sourceBuffer = null;
     }
     this.flushRange = [];
+    this.segments = [];
     this.appended = 0;
   }
 
@@ -230,13 +234,14 @@ class BufferController extends EventHandler {
     if (this._levelDuration === null) {
       return;
     }
-    let media = this.media;
-    let mediaSource = this.mediaSource;
-    if (!media || !mediaSource || media.readyState === 0 || mediaSource.readyState !== 'open') {
+    let media = this.media,
+        mediaSource = this.mediaSource,
+        sourceBuffer = this.sourceBuffer;
+    if (!media || !mediaSource || !sourceBuffer || media.readyState === 0 || mediaSource.readyState !== 'open') {
       return;
     }
-    for (let type in mediaSource.sourceBuffers) {
-      if (mediaSource.sourceBuffers[type].updating) {
+    for (let type in sourceBuffer) {
+      if (sourceBuffer[type].updating) {
         // can't set duration whilst a buffer is updating
         return;
       }
@@ -305,7 +310,7 @@ class BufferController extends EventHandler {
       if (segments.length) {
         var segment = segments.shift();
         try {
-          //logger.log(`appending ${segment.type} SB, size:${segment.data.length});
+          //logger.log(`appending ${segment.type} SB, size:${segment.data.length}`);
           sourceBuffer[segment.type].appendBuffer(segment.data);
           this.appendError = 0;
           this.appended++;
