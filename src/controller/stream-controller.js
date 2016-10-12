@@ -77,11 +77,10 @@ class StreamController extends EventHandler {
           logger.log('resuming video');
           media.play();
         }
-        this.state = State.IDLE;
       } else {
         this.lastCurrentTime = this.startPosition ? this.startPosition : startPosition;
-        this.state = State.STARTING;
       }
+      this.state = this.startFragRequested ? State.IDLE : State.STARTING;
       this.nextLoadPosition = this.startPosition = this.lastCurrentTime;
       this.tick();
     } else {
@@ -167,10 +166,10 @@ class StreamController extends EventHandler {
         // compute max Buffer Length that we could get from this load level, based on level bitrate. don't buffer more than 60 MB and more than 30s
         if ((this.levels[level]).hasOwnProperty('bitrate')) {
           maxBufLen = Math.max(8 * config.maxBufferSize / this.levels[level].bitrate, config.maxBufferLength);
-          maxBufLen = Math.min(maxBufLen, config.maxMaxBufferLength);
         } else {
           maxBufLen = config.maxBufferLength;
         }
+        maxBufLen = Math.min(maxBufLen,config.maxMaxBufferLength);
         // if buffer length is less than maxBufLen try to load a new fragment
         if (bufferLen < maxBufLen) {
           // set next load level : this will trigger a playlist load if needed
@@ -184,10 +183,29 @@ class StreamController extends EventHandler {
             this.state = State.WAITING_LEVEL;
             break;
           }
+
+          // we just got done loading the final fragment, check if we need to finalize media stream
+          if (!levelDetails.live && fragPrevious && fragPrevious.sn === levelDetails.endSN) {
+            // if we are not seeking or if we are seeking but everything (almost) til the end is buffered, let's signal eos
+            // we don't compare exactly media.duration === bufferEnd as there could be some subtle media duration difference when switching
+            // between different renditions. using half frag duration should help cope with these cases.
+            if (!isSeeking || (media.duration-bufferEnd) <= fragPrevious.duration/2) {
+              // Finalize the media stream
+              this.hls.trigger(Event.BUFFER_EOS);
+              this.state = State.ENDED;
+              break;
+            }
+          }
+
           // find fragment index, contiguous with end of buffer position
           let fragments = levelDetails.fragments,
-              fragLen = fragments.length,
-              start = fragments[0].start,
+              fragLen = fragments.length;
+
+          if (fragLen === 0) {
+            break;
+          }
+
+          let start = fragments[0].start,
               end = fragments[fragLen-1].start + fragments[fragLen-1].duration,
               frag;
 
@@ -305,17 +323,7 @@ class StreamController extends EventHandler {
                   break;
                 }
               } else {
-                // have we reached end of VOD playlist ?
-                if (!levelDetails.live) {
-                  // Finalize the media stream
-                  this.hls.trigger(Event.BUFFER_EOS);
-                  // We might be loading the last fragment but actually the media
-                  // is currently processing a seek command and waiting for new data to resume at another point.
-                  // Going to ended state while media is seeking can spawn an infinite buffering broken state.
-                  if (!isSeeking) {
-                    this.state = State.ENDED;
-                  }
-                }
+                // last fragment already loaded, just break
                 break;
               }
             }
@@ -347,6 +355,7 @@ class StreamController extends EventHandler {
               this.fragCurrent = frag;
               this.startFragRequested = true;
               frag.autoLevel = hls.autoLevelEnabled;
+              frag.bitrateTest = this.fragBitrateTest;
               hls.trigger(Event.FRAG_LOADING, {frag: frag});
               this.state = State.FRAG_LOADING;
             }
@@ -774,28 +783,33 @@ class StreamController extends EventHandler {
   }
 
   onFragLoaded(data) {
-    var fragCurrent = this.fragCurrent;
+    var fragCurrent = this.fragCurrent,
+        fragLoaded = data.frag;
     if (this.state === State.FRAG_LOADING &&
         fragCurrent &&
-        data.frag.level === fragCurrent.level &&
-        data.frag.sn === fragCurrent.sn) {
-
+        fragLoaded.level === fragCurrent.level &&
+        fragLoaded.sn === fragCurrent.sn) {
+      let stats = data.stats;
       logger.log(`Loaded  ${fragCurrent.sn} of level ${fragCurrent.level}`);
-      if (this.fragBitrateTest === true) {
+      // reset frag bitrate test in any case after frag loaded event
+      this.fragBitrateTest = false;
+      // if this frag was loaded to perform a bitrate test AND if hls.nextLoadLevel is greater than 0
+      // then this means that we should be able to load a fragment at a higher quality level
+      if (fragLoaded.bitrateTest === true && this.hls.nextLoadLevel) {
         // switch back to IDLE state ... we just loaded a fragment to determine adequate start bitrate and initialize autoswitch algo
         this.state = State.IDLE;
-        this.fragBitrateTest = false;
         this.startFragRequested = false;
-        data.stats.tparsed = data.stats.tbuffered = performance.now();
-        this.hls.trigger(Event.FRAG_BUFFERED, {stats: data.stats, frag: fragCurrent});
+        stats.tparsed = stats.tbuffered = performance.now();
+        this.hls.trigger(Event.FRAG_BUFFERED, {stats: stats, frag: fragCurrent});
+        this.tick();
       } else {
         this.state = State.PARSING;
         // transmux the MPEG-TS data to ISO-BMFF segments
-        this.stats = data.stats;
+        this.stats = stats;
         var currentLevel = this.levels[this.level],
             details = currentLevel.details,
             duration = details.totalduration,
-            start = fragCurrent.startDTS !== undefined ? fragCurrent.startDTS  : fragCurrent.start,
+            start = fragCurrent.startDTS !== undefined && !isNaN(fragCurrent.startDTS) ? fragCurrent.startDTS  : fragCurrent.start,
             level = fragCurrent.level,
             sn = fragCurrent.sn,
             audioCodec = currentLevel.audioCodec || this.config.defaultAudioCodec;
@@ -974,6 +988,10 @@ class StreamController extends EventHandler {
   }
 
   onError(data) {
+    let media = this.media,
+        // 0.4 : tolerance needed as some browsers stalls playback before reaching buffered end
+        mediaBuffered = media && this.isBuffered(media.currentTime) && this.isBuffered(media.currentTime+0.4),
+        frag = data.frag || this.fragCurrent;
     switch(data.details) {
       case ErrorDetails.FRAG_LOAD_ERROR:
       case ErrorDetails.FRAG_LOAD_TIMEOUT:
@@ -984,10 +1002,11 @@ class StreamController extends EventHandler {
           } else {
             loadError=1;
           }
-          if (loadError <= this.config.fragLoadingMaxRetry) {
+          // keep retrying / don't raise fatal network error if current position is buffered
+          if (loadError <= this.config.fragLoadingMaxRetry || mediaBuffered) {
             this.fragLoadError = loadError;
             // reset load counter to avoid frag loop loading error
-            data.frag.loadCounter = 0;
+            frag.loadCounter = 0;
             // exponential backoff capped to 64s
             var delay = Math.min(Math.pow(2,loadError-1)*this.config.fragLoadingRetryDelay,64000);
             logger.warn(`mediaController: frag loading failed, retry in ${delay} ms`);
@@ -1004,6 +1023,25 @@ class StreamController extends EventHandler {
         }
         break;
       case ErrorDetails.FRAG_LOOP_LOADING_ERROR:
+        if(!data.fatal) {
+          // if buffer is not empty
+          if (mediaBuffered) {
+            // try to reduce max buffer length : rationale is that we could get
+            // frag loop loading error because of buffer eviction
+            this._reduceMaxMaxBufferLength(frag.duration);
+            this.state = State.IDLE;
+          } else {
+            // buffer empty. report as fatal if in manual mode or if lowest level.
+            // level controller takes care of emergency switch down logic
+            if (!frag.autoLevel || frag.level === 0) {
+              // redispatch same error but with fatal set to true
+              data.fatal = true;
+              this.hls.trigger(Event.ERROR, data);
+              this.state = State.ERROR;
+            }
+          }
+        }
+        break;
       case ErrorDetails.LEVEL_LOAD_ERROR:
       case ErrorDetails.LEVEL_LOAD_TIMEOUT:
       case ErrorDetails.KEY_LOAD_ERROR:
@@ -1018,16 +1056,22 @@ class StreamController extends EventHandler {
       case ErrorDetails.BUFFER_FULL_ERROR:
         // only reduce max buf len if in appending state
         if (this.state === State.PARSING || this.state === State.PARSED) {
-          // reduce max buffer length as it might be too high. we do this to avoid loop flushing ...
-          this.config.maxMaxBufferLength/=2;
-          logger.warn(`reduce max buffer length to ${this.config.maxMaxBufferLength}s and switch to IDLE state`);
-          // increase fragment load Index to avoid frag loop loading error after buffer flush
-          this.fragLoadIdx += 2 * this.config.fragLoadingLoopThreshold;
+          this._reduceMaxMaxBufferLength(frag.duration);
           this.state = State.IDLE;
         }
         break;
       default:
         break;
+    }
+  }
+
+  _reduceMaxMaxBufferLength(minLength) {
+    if (this.config.maxMaxBufferLength >= minLength) {
+      // reduce max buffer length as it might be too high. we do this to avoid loop flushing ...
+      this.config.maxMaxBufferLength/=2;
+      logger.warn(`reduce max buffer length to ${this.config.maxMaxBufferLength}s and switch to IDLE state`);
+      // increase fragment load Index to avoid frag loop loading error after buffer flush
+      this.fragLoadIdx += 2 * this.config.fragLoadingLoopThreshold;
     }
   }
 
