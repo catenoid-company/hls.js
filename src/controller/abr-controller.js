@@ -115,10 +115,12 @@ class AbrController extends EventHandler {
             this.bwEstimator.sample(requestDelay,frag.loaded);
             // abort fragment loading ...
             logger.warn(`loading too slow, abort fragment loading and switch to level ${nextLoadLevel}`);
+            let loader = frag.loader,
+                stats = loader.stats;
             //abort fragment loading
-            frag.loader.abort();
+            loader.abort();
             this.clearTimer();
-            hls.trigger(Event.FRAG_LOAD_EMERGENCY_ABORTED, {frag: frag});
+            hls.trigger(Event.FRAG_LOAD_EMERGENCY_ABORTED, {frag: frag, stats: stats });
           }
         }
       }
@@ -144,7 +146,7 @@ class AbrController extends EventHandler {
     // stop monitoring bw once frag loaded
     this.clearTimer();
     // store level id after successful fragment load
-    this.lastLoadedFragLevel = data.frag.level;
+    this.lastLoadedFragLevel = frag.level;
     // reset forced auto level value so that next level will be selected
     this._nextAutoLevel = -1;
   }
@@ -179,18 +181,33 @@ class AbrController extends EventHandler {
   }
 
   get nextAutoLevel() {
-    var hls = this.hls, maxAutoLevel, levels = hls.levels, config = hls.config;
-    if (this._autoLevelCapping === -1 && levels && levels.length) {
+    let nextAutoLevel = this._nextAutoLevel, bwEstimator = this.bwEstimator;
+    // in case next auto level has been forced, and bw not available or not reliable
+    if (nextAutoLevel !== -1 && (!bwEstimator || !bwEstimator.canEstimate())) {
+      // cap next auto level by max auto level
+      return Math.min(nextAutoLevel,this.maxAutoLevel);
+    }
+    // compute next level using ABR logic
+    let nextABRAutoLevel = this.nextABRAutoLevel;
+    if (nextAutoLevel !== -1) {
+      // nextAutoLevel is defined, use it to cap ABR computed quality level
+      nextABRAutoLevel = Math.min(nextAutoLevel,nextABRAutoLevel);
+    }
+    return nextABRAutoLevel;
+  }
+
+  get maxAutoLevel() {
+    var levels = this.hls.levels,autoLevelCapping = this._autoLevelCapping, maxAutoLevel;
+    if (autoLevelCapping=== -1 && levels && levels.length) {
       maxAutoLevel = levels.length - 1;
     } else {
-      maxAutoLevel = this._autoLevelCapping;
+      maxAutoLevel = autoLevelCapping;
     }
+    return maxAutoLevel;
+  }
 
-    // in case next auto level has been forced, return it straight-away (but capped)
-    if (this._nextAutoLevel !== -1) {
-      return Math.min(this._nextAutoLevel,maxAutoLevel);
-    }
-
+  get nextABRAutoLevel() {
+    var hls = this.hls, maxAutoLevel = this.maxAutoLevel, levels = hls.levels, config = hls.config;
     const v = hls.media,
           currentLevel = this.lastLoadedFragLevel,
           currentFragDuration = this.fragCurrent ? this.fragCurrent.duration : 0,
@@ -204,7 +221,7 @@ class AbrController extends EventHandler {
 
     // First, look to see if we can find a level matching with our avg bandwidth AND that could also guarantee no rebuffering at all
     let bestLevel = this.findBestLevel(currentLevel,currentFragDuration,avgbw,maxAutoLevel,bufferStarvationDelay,config.abrBandWidthFactor,config.abrBandWidthUpFactor,levels);
-    if (bestLevel) {
+    if (bestLevel >= 0) {
       return bestLevel;
     } else {
       logger.trace('rebuffering expected to happen, lets try to find a quality level minimizing the rebuffering');
@@ -221,7 +238,8 @@ class AbrController extends EventHandler {
           logger.trace(`bitrate test took ${Math.round(1000*bitrateTestDelay)}ms, set first fragment max fetchDuration to ${Math.round(1000*maxStarvationDelay)} ms`);
         }
       }
-      return this.findBestLevel(currentLevel,currentFragDuration,avgbw,maxAutoLevel,bufferStarvationDelay+maxStarvationDelay,config.abrBandWidthFactor,config.abrBandWidthUpFactor,levels);
+      bestLevel = this.findBestLevel(currentLevel,currentFragDuration,avgbw,maxAutoLevel,bufferStarvationDelay+maxStarvationDelay,config.abrBandWidthFactor,config.abrBandWidthUpFactor,levels);
+      return Math.max(bestLevel,0);
     }
   }
 
@@ -254,7 +272,8 @@ class AbrController extends EventHandler {
         return i;
       }
     }
-    return 0;
+    // not enough time budget even with quality level 0 ... rebuffering might happen
+    return -1;
   }
 
   set nextAutoLevel(nextLevel) {

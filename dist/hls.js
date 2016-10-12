@@ -522,10 +522,12 @@ var AbrController = function (_EventHandler) {
               this.bwEstimator.sample(requestDelay, frag.loaded);
               // abort fragment loading ...
               _logger.logger.warn('loading too slow, abort fragment loading and switch to level ' + nextLoadLevel);
+              var loader = frag.loader,
+                  stats = loader.stats;
               //abort fragment loading
-              frag.loader.abort();
+              loader.abort();
               this.clearTimer();
-              hls.trigger(_events2.default.FRAG_LOAD_EMERGENCY_ABORTED, { frag: frag });
+              hls.trigger(_events2.default.FRAG_LOAD_EMERGENCY_ABORTED, { frag: frag, stats: stats });
             }
           }
         }
@@ -553,7 +555,7 @@ var AbrController = function (_EventHandler) {
       // stop monitoring bw once frag loaded
       this.clearTimer();
       // store level id after successful fragment load
-      this.lastLoadedFragLevel = data.frag.level;
+      this.lastLoadedFragLevel = frag.level;
       // reset forced auto level value so that next level will be selected
       this._nextAutoLevel = -1;
     }
@@ -612,7 +614,8 @@ var AbrController = function (_EventHandler) {
           return i;
         }
       }
-      return 0;
+      // not enough time budget even with quality level 0 ... rebuffering might happen
+      return -1;
     }
   }, {
     key: 'autoLevelCapping',
@@ -628,21 +631,44 @@ var AbrController = function (_EventHandler) {
   }, {
     key: 'nextAutoLevel',
     get: function get() {
-      var hls = this.hls,
-          maxAutoLevel,
-          levels = hls.levels,
-          config = hls.config;
-      if (this._autoLevelCapping === -1 && levels && levels.length) {
+      var nextAutoLevel = this._nextAutoLevel,
+          bwEstimator = this.bwEstimator;
+      // in case next auto level has been forced, and bw not available or not reliable
+      if (nextAutoLevel !== -1 && (!bwEstimator || !bwEstimator.canEstimate())) {
+        // cap next auto level by max auto level
+        return Math.min(nextAutoLevel, this.maxAutoLevel);
+      }
+      // compute next level using ABR logic
+      var nextABRAutoLevel = this.nextABRAutoLevel;
+      if (nextAutoLevel !== -1) {
+        // nextAutoLevel is defined, use it to cap ABR computed quality level
+        nextABRAutoLevel = Math.min(nextAutoLevel, nextABRAutoLevel);
+      }
+      return nextABRAutoLevel;
+    },
+    set: function set(nextLevel) {
+      this._nextAutoLevel = nextLevel;
+    }
+  }, {
+    key: 'maxAutoLevel',
+    get: function get() {
+      var levels = this.hls.levels,
+          autoLevelCapping = this._autoLevelCapping,
+          maxAutoLevel;
+      if (autoLevelCapping === -1 && levels && levels.length) {
         maxAutoLevel = levels.length - 1;
       } else {
-        maxAutoLevel = this._autoLevelCapping;
+        maxAutoLevel = autoLevelCapping;
       }
-
-      // in case next auto level has been forced, return it straight-away (but capped)
-      if (this._nextAutoLevel !== -1) {
-        return Math.min(this._nextAutoLevel, maxAutoLevel);
-      }
-
+      return maxAutoLevel;
+    }
+  }, {
+    key: 'nextABRAutoLevel',
+    get: function get() {
+      var hls = this.hls,
+          maxAutoLevel = this.maxAutoLevel,
+          levels = hls.levels,
+          config = hls.config;
       var v = hls.media,
           currentLevel = this.lastLoadedFragLevel,
           currentFragDuration = this.fragCurrent ? this.fragCurrent.duration : 0,
@@ -658,7 +684,7 @@ var AbrController = function (_EventHandler) {
 
       // First, look to see if we can find a level matching with our avg bandwidth AND that could also guarantee no rebuffering at all
       var bestLevel = this.findBestLevel(currentLevel, currentFragDuration, avgbw, maxAutoLevel, bufferStarvationDelay, config.abrBandWidthFactor, config.abrBandWidthUpFactor, levels);
-      if (bestLevel) {
+      if (bestLevel >= 0) {
         return bestLevel;
       } else {
         _logger.logger.trace('rebuffering expected to happen, lets try to find a quality level minimizing the rebuffering');
@@ -675,11 +701,9 @@ var AbrController = function (_EventHandler) {
             _logger.logger.trace('bitrate test took ' + Math.round(1000 * bitrateTestDelay) + 'ms, set first fragment max fetchDuration to ' + Math.round(1000 * maxStarvationDelay) + ' ms');
           }
         }
-        return this.findBestLevel(currentLevel, currentFragDuration, avgbw, maxAutoLevel, bufferStarvationDelay + maxStarvationDelay, config.abrBandWidthFactor, config.abrBandWidthUpFactor, levels);
+        bestLevel = this.findBestLevel(currentLevel, currentFragDuration, avgbw, maxAutoLevel, bufferStarvationDelay + maxStarvationDelay, config.abrBandWidthFactor, config.abrBandWidthUpFactor, levels);
+        return Math.max(bestLevel, 0);
       }
-    },
-    set: function set(nextLevel) {
-      this._nextAutoLevel = nextLevel;
     }
   }]);
 
@@ -1335,16 +1359,23 @@ var EwmaBandWidthEstimator = function () {
       this.slow_.sample(weight, bandwidth);
     }
   }, {
+    key: 'canEstimate',
+    value: function canEstimate() {
+      var fast = this.fast_;
+      return fast && fast.getTotalWeight() >= this.minWeight_;
+    }
+  }, {
     key: 'getEstimate',
     value: function getEstimate() {
-      if (!this.fast_ || !this.slow_ || this.fast_.getTotalWeight() < this.minWeight_) {
+      if (this.canEstimate()) {
+        //console.log('slow estimate:'+ Math.round(this.slow_.getEstimate()));
+        //console.log('fast estimate:'+ Math.round(this.fast_.getEstimate()));
+        // Take the minimum of these two estimates.  This should have the effect of
+        // adapting down quickly, but up more slowly.
+        return Math.min(this.fast_.getEstimate(), this.slow_.getEstimate());
+      } else {
         return this.defaultEstimate_;
       }
-      //console.log('slow estimate:'+ Math.round(this.slow_.getEstimate()));
-      //console.log('fast estimate:'+ Math.round(this.fast_.getEstimate()));
-      // Take the minimum of these two estimates.  This should have the effect of
-      // adapting down quickly, but up more slowly.
-      return Math.min(this.fast_.getEstimate(), this.slow_.getEstimate());
     }
   }, {
     key: 'destroy',
@@ -1561,7 +1592,6 @@ var LevelController = function (_EventHandler) {
       /* try to switch to a redundant stream if any available.
        * if no redundant stream available, emergency switch down (if in auto mode and current level not 0)
        * otherwise, we cannot recover this network error ...
-       * don't raise FRAG_LOAD_ERROR and FRAG_LOAD_TIMEOUT as fatal, as it is handled by mediaController
        */
       if (levelId !== undefined) {
         level = this._levels[levelId];
@@ -1573,16 +1603,16 @@ var LevelController = function (_EventHandler) {
           // we could try to recover if in auto mode and current level not lowest level (0)
           var recoverable = this._manualLevel === -1 && levelId;
           if (recoverable) {
-            _logger.logger.warn('level controller,' + details + ': emergency switch-down for next fragment');
-            hls.abrController.nextAutoLevel = 0;
+            _logger.logger.warn('level controller,' + details + ': switch-down for next fragment');
+            hls.nextLoadLevel = levelId - 1;
           } else if (level && level.details && level.details.live) {
             _logger.logger.warn('level controller,' + details + ' on live stream, discard');
             if (levelError) {
               // reset this._level so that another call to set level() will retrigger a frag load
               this._level = undefined;
             }
-            // FRAG_LOAD_ERROR and FRAG_LOAD_TIMEOUT are handled by mediaController
-          } else if (details !== _errors.ErrorDetails.FRAG_LOAD_ERROR && details !== _errors.ErrorDetails.FRAG_LOAD_TIMEOUT) {
+            // fragment errors are all handled  by streamController
+          } else if (details !== _errors.ErrorDetails.FRAG_LOAD_ERROR && details !== _errors.ErrorDetails.FRAG_LOAD_TIMEOUT && details !== _errors.ErrorDetails.FRAG_LOOP_LOADING_ERROR) {
               _logger.logger.error('cannot recover ' + details + ' error');
               this._level = undefined;
               // stopping live reloading timer if any
@@ -1914,10 +1944,10 @@ var StreamController = function (_EventHandler) {
           // compute max Buffer Length that we could get from this load level, based on level bitrate. don't buffer more than 60 MB and more than 30s
           if (this.levels[level].hasOwnProperty('bitrate')) {
             maxBufLen = Math.max(8 * config.maxBufferSize / this.levels[level].bitrate, config.maxBufferLength);
-            maxBufLen = Math.min(maxBufLen, config.maxMaxBufferLength);
           } else {
             maxBufLen = config.maxBufferLength;
           }
+          maxBufLen = Math.min(maxBufLen, config.maxMaxBufferLength);
           // if buffer length is less than maxBufLen try to load a new fragment
           if (bufferLen < maxBufLen) {
             // set next load level : this will trigger a playlist load if needed
@@ -1947,8 +1977,13 @@ var StreamController = function (_EventHandler) {
 
             // find fragment index, contiguous with end of buffer position
             var fragments = levelDetails.fragments,
-                fragLen = fragments.length,
-                start = fragments[0].start,
+                fragLen = fragments.length;
+
+            if (fragLen === 0) {
+              break;
+            }
+
+            var start = fragments[0].start,
                 end = fragments[fragLen - 1].start + fragments[fragLen - 1].duration,
                 frag = void 0;
 
@@ -2540,7 +2575,7 @@ var StreamController = function (_EventHandler) {
           this.state = State.IDLE;
           this.startFragRequested = false;
           stats.tparsed = stats.tbuffered = performance.now();
-          this.hls.trigger(_events2.default.FRAG_BUFFERED, { stats: data.stats, frag: fragCurrent });
+          this.hls.trigger(_events2.default.FRAG_BUFFERED, { stats: stats, frag: fragCurrent });
           this.tick();
         } else {
           this.state = State.PARSING;
@@ -2739,6 +2774,11 @@ var StreamController = function (_EventHandler) {
   }, {
     key: 'onError',
     value: function onError(data) {
+      var media = this.media,
+
+      // 0.4 : tolerance needed as some browsers stalls playback before reaching buffered end
+      mediaBuffered = media && this.isBuffered(media.currentTime) && this.isBuffered(media.currentTime + 0.4),
+          frag = data.frag || this.fragCurrent;
       switch (data.details) {
         case _errors.ErrorDetails.FRAG_LOAD_ERROR:
         case _errors.ErrorDetails.FRAG_LOAD_TIMEOUT:
@@ -2749,12 +2789,11 @@ var StreamController = function (_EventHandler) {
             } else {
               loadError = 1;
             }
-            if (loadError <= this.config.fragLoadingMaxRetry ||
             // keep retrying / don't raise fatal network error if current position is buffered
-            this.media && this.isBuffered(this.media.currentTime)) {
+            if (loadError <= this.config.fragLoadingMaxRetry || mediaBuffered) {
               this.fragLoadError = loadError;
               // reset load counter to avoid frag loop loading error
-              data.frag.loadCounter = 0;
+              frag.loadCounter = 0;
               // exponential backoff capped to 64s
               var delay = Math.min(Math.pow(2, loadError - 1) * this.config.fragLoadingRetryDelay, 64000);
               _logger.logger.warn('mediaController: frag loading failed, retry in ' + delay + ' ms');
@@ -2771,6 +2810,25 @@ var StreamController = function (_EventHandler) {
           }
           break;
         case _errors.ErrorDetails.FRAG_LOOP_LOADING_ERROR:
+          if (!data.fatal) {
+            // if buffer is not empty
+            if (mediaBuffered) {
+              // try to reduce max buffer length : rationale is that we could get
+              // frag loop loading error because of buffer eviction
+              this._reduceMaxMaxBufferLength(frag.duration);
+              this.state = State.IDLE;
+            } else {
+              // buffer empty. report as fatal if in manual mode or if lowest level.
+              // level controller takes care of emergency switch down logic
+              if (!frag.autoLevel || frag.level === 0) {
+                // redispatch same error but with fatal set to true
+                data.fatal = true;
+                this.hls.trigger(_events2.default.ERROR, data);
+                this.state = State.ERROR;
+              }
+            }
+          }
+          break;
         case _errors.ErrorDetails.LEVEL_LOAD_ERROR:
         case _errors.ErrorDetails.LEVEL_LOAD_TIMEOUT:
         case _errors.ErrorDetails.KEY_LOAD_ERROR:
@@ -2785,16 +2843,23 @@ var StreamController = function (_EventHandler) {
         case _errors.ErrorDetails.BUFFER_FULL_ERROR:
           // only reduce max buf len if in appending state
           if (this.state === State.PARSING || this.state === State.PARSED) {
-            // reduce max buffer length as it might be too high. we do this to avoid loop flushing ...
-            this.config.maxMaxBufferLength /= 2;
-            _logger.logger.warn('reduce max buffer length to ' + this.config.maxMaxBufferLength + 's and switch to IDLE state');
-            // increase fragment load Index to avoid frag loop loading error after buffer flush
-            this.fragLoadIdx += 2 * this.config.fragLoadingLoopThreshold;
+            this._reduceMaxMaxBufferLength(frag.duration);
             this.state = State.IDLE;
           }
           break;
         default:
           break;
+      }
+    }
+  }, {
+    key: '_reduceMaxMaxBufferLength',
+    value: function _reduceMaxMaxBufferLength(minLength) {
+      if (this.config.maxMaxBufferLength >= minLength) {
+        // reduce max buffer length as it might be too high. we do this to avoid loop flushing ...
+        this.config.maxMaxBufferLength /= 2;
+        _logger.logger.warn('reduce max buffer length to ' + this.config.maxMaxBufferLength + 's and switch to IDLE state');
+        // increase fragment load Index to avoid frag loop loading error after buffer flush
+        this.fragLoadIdx += 2 * this.config.fragLoadingLoopThreshold;
       }
     }
   }, {
@@ -9054,7 +9119,7 @@ var XhrLoader = function () {
         xhr = this.loader = new XMLHttpRequest();
       }
 
-      xhr.onloadend = this.loadend.bind(this);
+      xhr.onreadystatechange = this.readystatechange.bind(this);
       xhr.onprogress = this.loadprogress.bind(this);
 
       xhr.open('GET', this.url, true);
@@ -9068,35 +9133,49 @@ var XhrLoader = function () {
       if (this.xhrSetup) {
         this.xhrSetup(xhr, this.url);
       }
-      this.timeoutHandle = window.setTimeout(this.loadtimeout.bind(this), this.timeout);
+      // first timeout to track HEADERS_RECEIVED, set to half total timeout.
+      this.timeoutHandle = window.setTimeout(this.loadtimeout.bind(this), this.timeout / 2);
       xhr.send();
     }
   }, {
-    key: 'loadend',
-    value: function loadend(event) {
+    key: 'readystatechange',
+    value: function readystatechange(event) {
       var xhr = event.currentTarget,
-          status = xhr.status,
+          readystate = xhr.readyState,
           stats = this.stats;
       // don't proceed if xhr has been aborted
       if (!stats.aborted) {
-        // http status between 200 to 299 are all successful
-        if (status >= 200 && status < 300) {
-          window.clearTimeout(this.timeoutHandle);
-          stats.tload = Math.max(stats.tfirst, performance.now());
-          this.onSuccess(event, stats);
-        } else {
-          // if max nb of retries reached or if http status between 400 and 499 (such error cannot be recovered, retrying is useless), return error
-          if (stats.retry >= this.maxRetry || status >= 400 && status < 499) {
+        // HEADERS_RECEIVED
+        if (readystate >= 2) {
+          if (stats.tfirst === 0) {
+            stats.tfirst = Math.max(performance.now(), stats.trequest);
+            // clear first timeout after headers have been received
             window.clearTimeout(this.timeoutHandle);
-            _logger.logger.error(status + ' while loading ' + this.url);
-            this.onError(event);
-          } else {
-            _logger.logger.warn(status + ' while loading ' + this.url + ', retrying in ' + this.retryDelay + '...');
-            this.destroy();
-            window.setTimeout(this.loadInternal.bind(this), this.retryDelay);
-            // exponential backoff
-            this.retryDelay = Math.min(2 * this.retryDelay, 64000);
-            stats.retry++;
+            // reset timeout to total timeout duration minus the time it took to receive headers
+            this.timeoutHandle = window.setTimeout(this.loadtimeout.bind(this), this.timeout - (stats.tfirst - stats.trequest));
+          }
+          if (readystate === 4) {
+            var status = xhr.status;
+            // http status between 200 to 299 are all successful
+            if (status >= 200 && status < 300) {
+              window.clearTimeout(this.timeoutHandle);
+              stats.tload = Math.max(stats.tfirst, performance.now());
+              this.onSuccess(event, stats);
+            } else {
+              // if max nb of retries reached or if http status between 400 and 499 (such error cannot be recovered, retrying is useless), return error
+              if (stats.retry >= this.maxRetry || status >= 400 && status < 499) {
+                window.clearTimeout(this.timeoutHandle);
+                _logger.logger.error(status + ' while loading ' + this.url);
+                this.onError(event);
+              } else {
+                _logger.logger.warn(status + ' while loading ' + this.url + ', retrying in ' + this.retryDelay + '...');
+                this.destroy();
+                this.timeoutHandle = window.setTimeout(this.loadInternal.bind(this), this.retryDelay);
+                // exponential backoff
+                this.retryDelay = Math.min(2 * this.retryDelay, 64000);
+                stats.retry++;
+              }
+            }
           }
         }
       }
@@ -9111,9 +9190,6 @@ var XhrLoader = function () {
     key: 'loadprogress',
     value: function loadprogress(event) {
       var stats = this.stats;
-      if (stats.tfirst === 0) {
-        stats.tfirst = Math.max(performance.now(), stats.trequest);
-      }
       stats.loaded = event.loaded;
       if (this.onProgress) {
         this.onProgress(event, stats);

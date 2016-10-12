@@ -208,7 +208,6 @@ class LevelController extends EventHandler {
     /* try to switch to a redundant stream if any available.
      * if no redundant stream available, emergency switch down (if in auto mode and current level not 0)
      * otherwise, we cannot recover this network error ...
-     * don't raise FRAG_LOAD_ERROR and FRAG_LOAD_TIMEOUT as fatal, as it is handled by mediaController
      */
     if (levelId !== undefined) {
       level = this._levels[levelId];
@@ -220,16 +219,18 @@ class LevelController extends EventHandler {
         // we could try to recover if in auto mode and current level not lowest level (0)
         let recoverable = ((this._manualLevel === -1) && levelId);
         if (recoverable) {
-          logger.warn(`level controller,${details}: emergency switch-down for next fragment`);
-          hls.abrController.nextAutoLevel = 0;
+          logger.warn(`level controller,${details}: switch-down for next fragment`);
+          hls.nextLoadLevel = levelId - 1;
         } else if(level && level.details && level.details.live) {
           logger.warn(`level controller,${details} on live stream, discard`);
           if (levelError) {
             // reset this._level so that another call to set level() will retrigger a frag load
             this._level = undefined;
           }
-        // FRAG_LOAD_ERROR and FRAG_LOAD_TIMEOUT are handled by mediaController
-        } else if (details !== ErrorDetails.FRAG_LOAD_ERROR && details !== ErrorDetails.FRAG_LOAD_TIMEOUT) {
+        // fragment errors are all handled  by streamController
+        } else if (details !== ErrorDetails.FRAG_LOAD_ERROR &&
+                   details !== ErrorDetails.FRAG_LOAD_TIMEOUT &&
+                   details !== ErrorDetails.FRAG_LOOP_LOADING_ERROR) {
           logger.error(`cannot recover ${details} error`);
           this._level = undefined;
           // stopping live reloading timer if any

@@ -55,7 +55,7 @@ class XhrLoader {
        xhr = this.loader = new XMLHttpRequest();
     }
 
-    xhr.onloadend = this.loadend.bind(this);
+    xhr.onreadystatechange = this.readystatechange.bind(this);
     xhr.onprogress = this.loadprogress.bind(this);
 
     xhr.open('GET', this.url, true);
@@ -69,34 +69,48 @@ class XhrLoader {
     if (this.xhrSetup) {
       this.xhrSetup(xhr, this.url);
     }
-    this.timeoutHandle = window.setTimeout(this.loadtimeout.bind(this), this.timeout);
+    // first timeout to track HEADERS_RECEIVED, set to half total timeout.
+    this.timeoutHandle = window.setTimeout(this.loadtimeout.bind(this), this.timeout/2);
     xhr.send();
   }
 
-  loadend(event) {
+  readystatechange(event) {
     var xhr = event.currentTarget,
-        status = xhr.status,
+        readystate = xhr.readyState,
         stats = this.stats;
     // don't proceed if xhr has been aborted
     if (!stats.aborted) {
-        // http status between 200 to 299 are all successful
-        if (status >= 200 && status < 300)  {
+      // HEADERS_RECEIVED
+      if (readystate >=2) {
+        if (stats.tfirst === 0) {
+          stats.tfirst = Math.max(performance.now(), stats.trequest);
+          // clear first timeout after headers have been received
           window.clearTimeout(this.timeoutHandle);
-          stats.tload = Math.max(stats.tfirst,performance.now());
-          this.onSuccess(event, stats);
-      } else {
-          // if max nb of retries reached or if http status between 400 and 499 (such error cannot be recovered, retrying is useless), return error
-        if (stats.retry >= this.maxRetry || (status >= 400 && status < 499)) {
-          window.clearTimeout(this.timeoutHandle);
-          logger.error(`${status} while loading ${this.url}` );
-          this.onError(event);
-        } else {
-          logger.warn(`${status} while loading ${this.url}, retrying in ${this.retryDelay}...`);
-          this.destroy();
-          window.setTimeout(this.loadInternal.bind(this), this.retryDelay);
-          // exponential backoff
-          this.retryDelay = Math.min(2 * this.retryDelay, 64000);
-          stats.retry++;
+          // reset timeout to total timeout duration minus the time it took to receive headers
+          this.timeoutHandle = window.setTimeout(this.loadtimeout.bind(this), this.timeout - (stats.tfirst-stats.trequest));
+        }
+        if (readystate === 4) {
+          let status = xhr.status;
+          // http status between 200 to 299 are all successful
+          if (status >= 200 && status < 300)  {
+            window.clearTimeout(this.timeoutHandle);
+            stats.tload = Math.max(stats.tfirst,performance.now());
+            this.onSuccess(event, stats);
+          } else {
+              // if max nb of retries reached or if http status between 400 and 499 (such error cannot be recovered, retrying is useless), return error
+            if (stats.retry >= this.maxRetry || (status >= 400 && status < 499)) {
+              window.clearTimeout(this.timeoutHandle);
+              logger.error(`${status} while loading ${this.url}` );
+              this.onError(event);
+            } else {
+              logger.warn(`${status} while loading ${this.url}, retrying in ${this.retryDelay}...`);
+              this.destroy();
+              this.timeoutHandle = window.setTimeout(this.loadInternal.bind(this), this.retryDelay);
+              // exponential backoff
+              this.retryDelay = Math.min(2 * this.retryDelay, 64000);
+              stats.retry++;
+            }
+          }
         }
       }
     }
@@ -109,9 +123,6 @@ class XhrLoader {
 
   loadprogress(event) {
     var stats = this.stats;
-    if (stats.tfirst === 0) {
-      stats.tfirst = Math.max(performance.now(), stats.trequest);
-    }
     stats.loaded = event.loaded;
     if (this.onProgress) {
       this.onProgress(event, stats);
