@@ -7,11 +7,17 @@ import ID3 from '../demux/id3';
 
  class AACDemuxer {
 
-  constructor(observer,remuxerClass) {
+  constructor(observer, remuxer, config) {
     this.observer = observer;
-    this.remuxerClass = remuxerClass;
-    this.remuxer = new this.remuxerClass(observer);
-    this._aacTrack = {container : 'audio/adts', type: 'audio', id :-1, sequenceNumber: 0, samples : [], len : 0};
+    this.config = config;
+    this.remuxer = remuxer;
+  }
+
+  resetInitSegment(initSegment,audioCodec,videoCodec, duration) {
+    this._aacTrack = {container : 'audio/adts', type: 'audio', id :-1, sequenceNumber: 0, isAAC : true , samples : [], len : 0, manifestCodec : audioCodec, duration : duration};
+  }
+
+  resetTimeStamp() {
   }
 
   static probe(data) {
@@ -31,11 +37,14 @@ import ID3 from '../demux/id3';
 
 
   // feed incoming data to the front of the parsing pipeline
-  push(data, audioCodec, videoCodec, timeOffset, cc, level, sn, duration) {
-    var track = this._aacTrack,
+  append(data, timeOffset, contiguous,accurateTimeOffset) {
+    var track,
         id3 = new ID3(data),
         pts = 90*id3.timeStamp,
         config, frameLength, frameDuration, frameIndex, offset, headerLength, stamp, len, aacSample;
+
+    track = this._aacTrack;
+
     // look for ADTS header (0xFFFx)
     for (offset = id3.length, len = data.length; offset < len - 1; offset++) {
       if ((data[offset] === 0xff) && (data[offset+1] & 0xf0) === 0xf0) {
@@ -44,12 +53,11 @@ import ID3 from '../demux/id3';
     }
 
     if (!track.audiosamplerate) {
-      config = ADTS.getAudioConfig(this.observer,data, offset, audioCodec);
+      config = ADTS.getAudioConfig(this.observer,data, offset, track.manifestCodec);
       track.config = config.config;
       track.audiosamplerate = config.samplerate;
       track.channelCount = config.channelCount;
       track.codec = config.codec;
-      track.duration = duration;
       logger.log(`parsed codec:${track.codec},rate:${config.samplerate},nb channel:${config.channelCount}`);
     }
     frameIndex = 0;
@@ -82,7 +90,7 @@ import ID3 from '../demux/id3';
         break;
       }
     }
-    this.remuxer.remux(this._aacTrack,{samples : []}, {samples : [ { pts: pts, dts : pts, unit : id3.payload} ]}, { samples: [] }, timeOffset);
+    this.remuxer.remux(track,{samples : []}, {samples : [ { pts: pts, dts : pts, unit : id3.payload} ]}, { samples: [] }, timeOffset, contiguous,accurateTimeOffset);
   }
 
   destroy() {
