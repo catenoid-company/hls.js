@@ -12,31 +12,51 @@ class AudioTrackController extends EventHandler {
     super(hls, Event.MANIFEST_LOADING,
                Event.MANIFEST_LOADED,
                Event.AUDIO_TRACK_LOADED);
-    this.tracks = [];
-    this.trackId = 0;
+    this.ticks = 0;
+    this.ontick = this.tick.bind(this);
   }
 
   destroy() {
     EventHandler.prototype.destroy.call(this);
   }
-
+  tick() {
+    this.ticks++;
+    if (this.ticks === 1) {
+      this.doTick();
+      if (this.ticks > 1) {
+        setTimeout(this.tick, 1);
+      }
+      this.ticks = 0;
+    }
+  }
+  doTick() {
+    this.updateTrack(this.trackId);
+  }
   onManifestLoading() {
     // reset audio tracks on manifest loading
     this.tracks = [];
-    this.trackId = 0;
+    this.trackId = -1;
   }
 
   onManifestLoaded(data) {
     let tracks = data.audioTracks || [];
+    let defaultFound = false;
     this.tracks = tracks;
     this.hls.trigger(Event.AUDIO_TRACKS_UPDATED, {audioTracks : tracks});
     // loop through available audio tracks and autoselect default if needed
+    let id = 0;
     tracks.forEach(track => {
       if(track.default) {
-        this.audioTrack = track.id;
+        this.audioTrack = id;
+        defaultFound = true;
         return;
       }
+      id++;
     });
+    if (defaultFound === false && tracks.length) {
+      logger.log('no default audio track defined, use first audio track as default');
+      this.audioTrack = 0;
+    }
   }
 
   onAudioTrackLoaded(data) {
@@ -84,13 +104,41 @@ class AudioTrackController extends EventHandler {
       }
       this.trackId = newId;
       logger.log(`switching to audioTrack ${newId}`);
-      this.hls.trigger(Event.AUDIO_TRACK_SWITCH, {id: newId});
-      var audioTrack = this.tracks[newId];
+      let audioTrack = this.tracks[newId],
+          hls = this.hls,
+          type = audioTrack.type,
+          url = audioTrack.url,
+          eventObj = {id: newId, type : type, url : url};
+      // keep AUDIO_TRACK_SWITCH for legacy reason
+      hls.trigger(Event.AUDIO_TRACK_SWITCH, eventObj);
+      hls.trigger(Event.AUDIO_TRACK_SWITCHING, eventObj);
        // check if we need to load playlist for this audio Track
-      if (audioTrack.details === undefined || audioTrack.details.live === true) {
+       let details = audioTrack.details;
+      if (url && (details === undefined || details.live === true)) {
         // track not retrieved yet, or live playlist we need to (re)load it
         logger.log(`(re)loading playlist for audioTrack ${newId}`);
-        this.hls.trigger(Event.AUDIO_TRACK_LOADING, {url: audioTrack.url, id: newId});
+        hls.trigger(Event.AUDIO_TRACK_LOADING, {url: url, id: newId});
+      }
+    }
+  }
+
+  updateTrack(newId) {
+    // check if level idx is valid
+    if (newId >= 0 && newId < this.tracks.length) {
+      // stopping live reloading timer if any
+      if (this.timer) {
+       clearInterval(this.timer);
+       this.timer = null;
+      }
+      this.trackId = newId;
+      logger.log(`updating audioTrack ${newId}`);
+      let audioTrack = this.tracks[newId], url = audioTrack.url;
+       // check if we need to load playlist for this audio Track
+       let details = audioTrack.details;
+      if (url && (details === undefined || details.live === true)) {
+        // track not retrieved yet, or live playlist we need to (re)load it
+        logger.log(`(re)loading playlist for audioTrack ${newId}`);
+        this.hls.trigger(Event.AUDIO_TRACK_LOADING, {url: url, id: newId});
       }
     }
   }

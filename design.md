@@ -21,10 +21,9 @@ design idea is pretty simple :
         - retrieve "not buffered" media position greater then current playback position. this is performed by comparing video.buffered and video.currentTime.
           - if there are holes in video.buffered, smaller than config.maxBufferHole, they will be ignored.
         - retrieve URL of fragment matching with this media position, and appropriate quality level
-        - trigger KEY_LOADING event (only if fragment is encrypted)
         - trigger FRAG_LOADING event
         - **trigger fragment demuxing** on FRAG_LOADED
-        - trigger BUFFER_RESET on MANIFEST_PARSED or startLoad()
+        - trigger BUFFER_RESET on MANIFEST_PARSED or startLoad()        
         - trigger BUFFER_CODECS on FRAG_PARSING_INIT_SEGMENT
         - trigger BUFFER_APPENDING on FRAG_PARSING_DATA
         - once FRAG_PARSED is received an all segments have been appended (BUFFER_APPENDED) then buffer controller will recheck whether it needs to buffer more data.
@@ -56,8 +55,6 @@ design idea is pretty simple :
      - if we have less than 2 fragments buffered and if "expected time of fragment load completion" is bigger than "expected time of buffer starvation" and also bigger than duration needed to load fragment at next quality level (determined by auto quality switch algorithm), current fragment loading is aborted, stream-controller will **trigger an emergency switch down**.    
   - [src/controller/cap-level-controller.js][]
     - in charge of determining best quality level to actual size (dimensions: width and height) of the player 
-  - [src/controller/timeline-controller.js][]
-    - Manages pulling CEA-708 caption data from the fragments, running them through the cea-608-parser, and handing them off to a display class, which defaults to src/utils/cues.js
   - [src/crypt/aes.js][]
     - AES 128 software decryption routine, low level class handling decryption of 128 bit of data.
   - [src/crypt/aes128-decrypter.js][]  
@@ -120,10 +117,6 @@ design idea is pretty simple :
     - Attribute List parsing helper class, used by playlist-loader
   - [src/utils/binary-search.js][]
     - binary search helper class
-  - [src/utils/cea-608-parser.js][]
-    - Port of dash.js class of the same name to ECMAScript. This class outputs "Screen" objects which contain rows of characters that can be rendered by a separate class.
-  - [src/utils/cues.js][]
-    - Default CC renderer. Translates Screen objects from cea-608-parser into HTML5 VTTCue objects, rendered by the video tag
   - [src/utils/hex.js][]
     - Hex dump utils, useful for debug
   - [src/utils/logger.js][]

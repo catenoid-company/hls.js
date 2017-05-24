@@ -3,19 +3,18 @@
 */
 
 class DummyRemuxer {
-  constructor(observer, id) {
+  constructor(observer) {
     this.observer = observer;
-    this.id = id;
-  }
-
-  get passthrough() {
-    return false;
   }
 
   destroy() {
   }
 
-  insertDiscontinuity() {
+  resetInitSegment() {
+  }
+
+
+  resetTimeStamp() {
   }
 
   remux(audioTrack,videoTrack,id3Track,textTrack,timeOffset) {
