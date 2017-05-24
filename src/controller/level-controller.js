@@ -18,6 +18,7 @@ class LevelController extends EventHandler {
       Event.ERROR);
     this.ontick = this.tick.bind(this);
     this._manualLevel = -1;
+    this._startBitrateLevel = hls.config.startBitrateLevel || 0;
   }
 
   destroy() {
@@ -104,12 +105,17 @@ class LevelController extends EventHandler {
 
     if(levels.length) {
       // start bitrate is the first bitrate of the manifest
-      bitrateStart = levels[0].bitrate;
+      //bitrateStart = levels[0].bitrate;
+
       // sort level on bitrate
       levels.sort(function (a, b) {
         return a.bitrate - b.bitrate;
       });
       this._levels = levels;
+
+      //Sort 이후 startBitrateLevel에 해당하는 bitrateStart값을 설정한다.
+      bitrateStart = levels[this._startBitrateLevel].bitrate;
+
       // find index of first level in sorted levels
       for (let i = 0; i < levels.length; i++) {
         if (levels[i].bitrate === bitrateStart) {
@@ -365,4 +371,3 @@ class LevelController extends EventHandler {
 }
 
 export default LevelController;
-

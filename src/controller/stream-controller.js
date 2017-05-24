@@ -79,7 +79,7 @@ class StreamController extends EventHandler {
         let startLevel = hls.startLevel;
         if (startLevel === -1) {
           // -1 : guess start Level by doing a bitrate test by loading first fragment of lowest quality level
-          startLevel = 0;
+          startLevel = hls.config.startBitrateLevel || 0;
           this.bitrateTest = true;
         }
         // set new level to playlist loader : this will trigger start level load
@@ -1548,4 +1548,3 @@ _checkBuffer() {
   }
 }
 export default StreamController;
-
