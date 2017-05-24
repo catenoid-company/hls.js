@@ -4,18 +4,17 @@
 
 class DummyRemuxer {
   constructor(observer) {
-    this.PES_TIMESCALE = 90000;
     this.observer = observer;
-  }
-
-  get passthrough() {
-    return false;
   }
 
   destroy() {
   }
 
-  insertDiscontinuity() {
+  resetInitSegment() {
+  }
+
+
+  resetTimeStamp() {
   }
 
   remux(audioTrack,videoTrack,id3Track,textTrack,timeOffset) {
