@@ -59,7 +59,7 @@ header {
   <div class="header-container">
     <header class="wrapper clearfix">
       <h1>
-        <a target="_blank" href="https://github.com/dailymotion/hls.js">
+        <a target="_blank" href="https://github.com/video-dev/hls.js">
           <img src="https://cloud.githubusercontent.com/assets/616833/19739063/e10be95a-9bb9-11e6-8100-2896f8500138.png"/>
         </a>
       </h1>
@@ -209,7 +209,7 @@ header {
 
   <script src="../../streams.js"></script>
   <!-- live-reload script -->
-  <script src="//localhost:8001"></script>
+  <script src="//localhost:35729/livereload.js?snipver=1"></script>
   <script src="../dist/hls.js"></script>
   <script src="canvas.js"></script>
   <script src="metrics.js"></script>
@@ -240,7 +240,7 @@ $(document).ready(function() {
    $('#levelCapping').val(levelCapping);
    $('#defaultAudioCodec').val(defaultAudioCodec || "undefined");
 
-   $('h2').append(' <a target=_blank href=https://github.com/dailymotion/hls.js/releases/tag/v' + Hls.version + '>v' + Hls.version + '</a>');
+   $('h2').append(' <a target=_blank href=https://github.com/video-dev/hls.js/releases/tag/v' + Hls.version + '>v' + Hls.version + '</a>');
 
 });
 
@@ -257,7 +257,7 @@ $(document).ready(function() {
   video.volume = 0.05;
   $("#currentVersion").html("Hls version:" + Hls.version);
 
-  loadStream(decodeURIComponent(getURLParam('src','http://www.streambox.fr/playlists/x36xhzz/x36xhzz.m3u8')));
+  loadStream(decodeURIComponent(getURLParam('src','https://video-dev.github.io/streams/x36xhzz/x36xhzz.m3u8')));
 
   function loadStream(url) {
     hideCanvas();
@@ -948,6 +948,11 @@ function timeRangesToString(r) {
   }
 
   function updateLevelInfo() {
+
+    if (!hls.levels) {
+      return;
+    }
+
     var button_template = '<button type="button" class="btn btn-sm ';
     var button_enabled  = 'btn-primary" ';
     var button_disabled = 'btn-success" ';
@@ -1117,9 +1122,9 @@ function createfMP4(type) {
 }
 
 function arrayConcat(inputArray) {
-    let totalLength = inputArray.reduce( function(prev,cur) { return prev+cur.length} ,0);
-    let result = new Uint8Array(totalLength);
-    let offset = 0;
+    var totalLength = inputArray.reduce( function(prev,cur) { return prev+cur.length} ,0);
+    var result = new Uint8Array(totalLength);
+    var offset = 0;
     inputArray.forEach(function(element) {
       result.set(element, offset);
       offset += element.length;

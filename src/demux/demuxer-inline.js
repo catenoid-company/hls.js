@@ -8,15 +8,17 @@ import Decrypter from '../crypt/decrypter';
 import AACDemuxer from '../demux/aacdemuxer';
 import MP4Demuxer from '../demux/mp4demuxer';
 import TSDemuxer from '../demux/tsdemuxer';
+import MP3Demuxer from '../demux/mp3demuxer';
 import MP4Remuxer from '../remux/mp4-remuxer';
 import PassThroughRemuxer from '../remux/passthrough-remuxer';
 
 class DemuxerInline {
 
-  constructor(observer,typeSupported, config) {
+  constructor(observer,typeSupported, config, vendor) {
     this.observer = observer;
     this.typeSupported = typeSupported;
     this.config = config;
+    this.vendor = vendor;
   }
 
   destroy() {
@@ -65,6 +67,7 @@ class DemuxerInline {
       const typeSupported = this.typeSupported;
       const config = this.config;
       const muxConfig = [ {demux : TSDemuxer,  remux : MP4Remuxer},
+                          {demux : MP3Demuxer, remux : MP4Remuxer},
                           {demux : AACDemuxer, remux : MP4Remuxer},
                           {demux : MP4Demuxer, remux : PassThroughRemuxer}];
 
@@ -73,7 +76,7 @@ class DemuxerInline {
         const mux = muxConfig[i];
         const probe = mux.demux.probe;
         if(probe(data)) {
-          const remuxer = this.remuxer = new mux.remux(observer,config,typeSupported);
+          const remuxer = this.remuxer = new mux.remux(observer,config,typeSupported, this.vendor);
           demuxer = new mux.demux(observer,remuxer,config,typeSupported);
           this.probe = probe;
           break;
@@ -92,7 +95,7 @@ class DemuxerInline {
       remuxer.resetInitSegment();
     }
     if (discontinuity) {
-      demuxer.resetTimeStamp();
+      demuxer.resetTimeStamp(defaultInitPTS);
       remuxer.resetTimeStamp(defaultInitPTS);
     }
     if (typeof demuxer.setDecryptData === 'function') {
