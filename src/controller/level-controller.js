@@ -25,6 +25,7 @@ export default class LevelController extends EventHandler {
     this.currentLevelIndex = null;
     this.manualLevelIndex = -1;
     this.timer = null;
+    this._startBitrateLevel = hls.config.startBitrateLevel || 0;
 
     chromeOrFirefox = /chrome|firefox/.test(navigator.userAgent.toLowerCase());
   }
@@ -133,10 +134,15 @@ export default class LevelController extends EventHandler {
 
     if (levels.length > 0) {
       // start bitrate is the first bitrate of the manifest
-      bitrateStart = levels[0].bitrate;
+      //bitrateStart = levels[0].bitrate;
+
       // sort level on bitrate
       levels.sort((a, b) => a.bitrate - b.bitrate);
       this._levels = levels;
+
+      //Sort 이후 startBitrateLevel에 해당하는 bitrateStart값을 설정한다.
+      bitrateStart = levels[this._startBitrateLevel].bitrate;
+
       // find index of first level in sorted levels
       for (let i = 0; i < levels.length; i++) {
         if (levels[i].bitrate === bitrateStart) {

@@ -61,6 +61,9 @@ class StreamController extends BaseStreamController {
         let startLevel = hls.startLevel;
         if (startLevel === -1) {
           // -1 : guess start Level by doing a bitrate test by loading first fragment of lowest quality level
+          //startLevel = 0;
+
+          //startBitrateLevel에 해당하는 bitrateStart값을 설정한다.
           startLevel = hls.config.startBitrateLevel || 0;
           this.bitrateTest = true;
         }
