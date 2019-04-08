@@ -287,6 +287,8 @@ class LevelController extends EventHandler {
             let retryDelay = hls.config.levelLoadingRetryDelay;
             logger.warn(`level controller,${details}, but media buffered, retry in ${retryDelay}ms`);
             this.timer = setTimeout(this.ontick,retryDelay);
+            // boolean used to inform stream controller not to switch back to IDLE on non fatal error
+            data.levelRetry = true;
           } else {
             logger.error(`cannot recover ${details} error`);
             this._level = undefined;
@@ -295,9 +297,8 @@ class LevelController extends EventHandler {
               clearTimeout(this.timer);
               this.timer = null;
             }
-            // redispatch same error but with fatal set to true
+            // switch error to fatal
             data.fatal = true;
-            hls.trigger(Event.ERROR, data);
           }
         }
       }
@@ -349,8 +350,11 @@ class LevelController extends EventHandler {
   tick() {
     var levelId = this._level;
     if (levelId !== undefined && this.canload) {
-      var level = this._levels[levelId], urlId = level.urlId;
-      this.hls.trigger(Event.LEVEL_LOADING, {url: level.url[urlId], level: levelId, id: urlId});
+      var level = this._levels[levelId];
+      if (level && level.url) {
+        var urlId = level.urlId;
+        this.hls.trigger(Event.LEVEL_LOADING, {url: level.url[urlId], level: levelId, id: urlId});
+      }
     }
   }
 
