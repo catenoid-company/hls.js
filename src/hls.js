@@ -91,6 +91,7 @@ export default class Hls extends Observer {
     super();
 
     const defaultConfig = Hls.DefaultConfig;
+    this.firstPlayState = false;
 
     if ((config.liveSyncDurationCount || config.liveMaxLatencyDurationCount) && (config.liveSyncDuration || config.liveMaxLatencyDuration)) {
       throw new Error('Illegal hls.js config: don\'t mix up liveSyncDurationCount/liveMaxLatencyDurationCount and liveSyncDuration/liveMaxLatencyDuration');
@@ -222,6 +223,15 @@ export default class Hls extends Observer {
      * @member {ICoreComponent[]}
      */
     this.coreComponents = coreComponents;
+  }
+
+  _vjsPlayEventHandler() {
+    if (this.firstPlayState === false) {
+      this.firstPlayState = true;
+      this.config.maxBufferLength = this.config.maxBufferLength * this.config.playAfterMaxRate;
+      this.config.maxBufferSize = this.config.maxBufferSize * this.config.playAfterMaxRate;
+      this.config.playAfterMaxRate = 1;
+    }
   }
 
   /**

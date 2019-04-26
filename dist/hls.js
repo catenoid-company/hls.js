@@ -1182,6 +1182,7 @@ exports.hlsDefaultConfig = {
     initialLiveManifestSize: 1,
     maxBufferLength: 30,
     maxBufferSize: 60 * 1000 * 1000,
+    playAfterMaxRate: 1,
     maxBufferHole: 0.5,
     lowBufferWatchdogPeriod: 0.5,
     highBufferWatchdogPeriod: 3,
@@ -11534,6 +11535,7 @@ var Hls = /** @class */ (function (_super) {
         if (config === void 0) { config = {}; }
         var _this = _super.call(this) || this;
         var defaultConfig = Hls.DefaultConfig;
+        _this.firstPlayState = false;
         if ((config.liveSyncDurationCount || config.liveMaxLatencyDurationCount) && (config.liveSyncDuration || config.liveMaxLatencyDuration)) {
             throw new Error('Illegal hls.js config: don\'t mix up liveSyncDurationCount/liveMaxLatencyDurationCount and liveSyncDuration/liveMaxLatencyDuration');
         }
@@ -11649,7 +11651,7 @@ var Hls = /** @class */ (function (_super) {
          * @type {string}
          */
         get: function () {
-            return "0.12.4-feature-hls-library-update-SNAPSHOT";
+            return "0.12.4-feature-hls-library-update-SNAPSHOT-c56c182";
         },
         enumerable: true,
         configurable: true
@@ -11709,6 +11711,14 @@ var Hls = /** @class */ (function (_super) {
         enumerable: true,
         configurable: true
     });
+    Hls.prototype._vjsPlayEventHandler = function () {
+        if (this.firstPlayState === false) {
+            this.firstPlayState = true;
+            this.config.maxBufferLength = this.config.maxBufferLength * this.config.playAfterMaxRate;
+            this.config.maxBufferSize = this.config.maxBufferSize * this.config.playAfterMaxRate;
+            this.config.playAfterMaxRate = 1;
+        }
+    };
     /**
      * Dispose of the instance
      */
@@ -13202,7 +13212,8 @@ var PlaylistLoader = /** @class */ (function (_super) {
                 break;
             case ContextType.LEVEL:
                 // Disable internal loader retry logic, since we are managing retries in Level Controller
-                maxRetry = 0;
+                //maxRetry = 0;
+                maxRetry = 3;
                 timeout = config.levelLoadingTimeOut;
                 // TODO Introduce retry settings for audio-track and subtitle-track, it should not use level retry config
                 break;
