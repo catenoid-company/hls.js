@@ -7,8 +7,8 @@ import { BufferHelper } from '../utils/buffer-helper';
 import Demuxer from '../demux/demuxer';
 import Event from '../events';
 import { FragmentState } from './fragment-tracker';
-import Fragment from '../loader/fragment';
-import PlaylistLoader from '../loader/playlist-loader';
+import { ElementaryStreamTypes } from '../loader/fragment';
+import { PlaylistLevelType } from '../types/loader';
 import * as LevelHelper from './level-helper';
 import TimeRanges from '../utils/time-ranges';
 import { ErrorDetails } from '../errors';
@@ -47,6 +47,7 @@ class StreamController extends BaseStreamController {
     this._state = State.STOPPED;
     this.stallReported = false;
     this.gapController = null;
+    this.altAudio = false;
   }
 
   startLoad (startPosition) {
@@ -61,10 +62,7 @@ class StreamController extends BaseStreamController {
         let startLevel = hls.startLevel;
         if (startLevel === -1) {
           // -1 : guess start Level by doing a bitrate test by loading first fragment of lowest quality level
-          //startLevel = 0;
-
-          //startBitrateLevel에 해당하는 bitrateStart값을 설정한다.
-          startLevel = hls.config.startBitrateLevel || 0;
+          startLevel = 0;
           this.bitrateTest = true;
         }
         // set new level to playlist loader : this will trigger start level load
@@ -168,7 +166,7 @@ class StreamController extends BaseStreamController {
     let levelBitrate = levelInfo.bitrate,
       maxBufLen;
 
-    // compute max Buffer Length that we could get from this load level, based on level bitrate. don't buffer more than 60 MB and more than 30s
+    // compute max Buffer Length that we could get from this load level, based on level bitrate.
     if (levelBitrate) {
       maxBufLen = Math.max(8 * config.maxBufferSize / levelBitrate, config.maxBufferLength);
     } else {
@@ -282,9 +280,9 @@ class StreamController extends BaseStreamController {
 
     if (bufferEnd < Math.max(start - config.maxFragLookUpTolerance, end - maxLatency)) {
       let liveSyncPosition = this.liveSyncPosition = this.computeLivePosition(start, levelDetails);
-      logger.log(`buffer end: ${bufferEnd.toFixed(3)} is located too far from the end of live sliding playlist, reset currentTime to : ${liveSyncPosition.toFixed(3)}`);
       bufferEnd = liveSyncPosition;
-      if (media && media.readyState && media.duration > liveSyncPosition) {
+      if (media && !media.paused && media.readyState && media.duration > liveSyncPosition && liveSyncPosition > media.currentTime) {
+        logger.log(`buffer end: ${bufferEnd.toFixed(3)} is located too far from the end of live sliding playlist, reset currentTime to : ${liveSyncPosition.toFixed(3)}`);
         media.currentTime = liveSyncPosition;
       }
 
@@ -349,65 +347,68 @@ class StreamController extends BaseStreamController {
     return frag;
   }
 
-  _findFragment (start, fragPrevious, fragLen, fragments, bufferEnd, end, levelDetails) {
+  _findFragment (start, fragPreviousLoad, fragmentIndexRange, fragments, bufferEnd, end, levelDetails) {
     const config = this.hls.config;
-    let frag;
+    let fragNextLoad;
 
     if (bufferEnd < end) {
       const lookupTolerance = (bufferEnd > end - config.maxFragLookUpTolerance) ? 0 : config.maxFragLookUpTolerance;
       // Remove the tolerance if it would put the bufferEnd past the actual end of stream
       // Uses buffer and sequence number to calculate switch segment (required if using EXT-X-DISCONTINUITY-SEQUENCE)
-      frag = findFragmentByPTS(fragPrevious, fragments, bufferEnd, lookupTolerance);
+      fragNextLoad = findFragmentByPTS(fragPreviousLoad, fragments, bufferEnd, lookupTolerance);
     } else {
       // reach end of playlist
-      frag = fragments[fragLen - 1];
+      fragNextLoad = fragments[fragmentIndexRange - 1];
     }
-    if (frag) {
-      const curSNIdx = frag.sn - levelDetails.startSN;
-      const sameLevel = fragPrevious && frag.level === fragPrevious.level;
-      const prevFrag = fragments[curSNIdx - 1];
-      const nextFrag = fragments[curSNIdx + 1];
+
+    if (fragNextLoad) {
+      const curSNIdx = fragNextLoad.sn - levelDetails.startSN;
+      const sameLevel = fragPreviousLoad && fragNextLoad.level === fragPreviousLoad.level;
+      const prevSnFrag = fragments[curSNIdx - 1];
+      const nextSnFrag = fragments[curSNIdx + 1];
+
       // logger.log('find SN matching with pos:' +  bufferEnd + ':' + frag.sn);
-      if (fragPrevious && frag.sn === fragPrevious.sn) {
-        if (sameLevel && !frag.backtracked) {
-          if (frag.sn < levelDetails.endSN) {
-            let deltaPTS = fragPrevious.deltaPTS;
+      if (fragPreviousLoad && fragNextLoad.sn === fragPreviousLoad.sn) {
+        if (sameLevel && !fragNextLoad.backtracked) {
+          if (fragNextLoad.sn < levelDetails.endSN) {
+            let deltaPTS = fragPreviousLoad.deltaPTS;
             // if there is a significant delta between audio and video, larger than max allowed hole,
             // and if previous remuxed fragment did not start with a keyframe. (fragPrevious.dropped)
             // let's try to load previous fragment again to get last keyframe
             // then we will reload again current fragment (that way we should be able to fill the buffer hole ...)
-            if (deltaPTS && deltaPTS > config.maxBufferHole && fragPrevious.dropped && curSNIdx) {
-              frag = prevFrag;
-              logger.warn('SN just loaded, with large PTS gap between audio and video, maybe frag is not starting with a keyframe ? load previous one to try to overcome this');
+            if (deltaPTS && deltaPTS > config.maxBufferHole && fragPreviousLoad.dropped && curSNIdx) {
+              fragNextLoad = prevSnFrag;
+              logger.warn('Previous fragment was dropped with large PTS gap between audio and video. Maybe fragment is not starting with a keyframe? Loading previous one to try to overcome this');
             } else {
-              frag = nextFrag;
-              logger.log(`SN just loaded, load next one: ${frag.sn}`, frag);
+              fragNextLoad = nextSnFrag;
+              logger.log(`Re-loading fragment with SN: ${fragNextLoad.sn}`);
             }
           } else {
-            frag = null;
+            fragNextLoad = null;
           }
-        } else if (frag.backtracked) {
+        } else if (fragNextLoad.backtracked) {
           // Only backtrack a max of 1 consecutive fragment to prevent sliding back too far when little or no frags start with keyframes
-          if (nextFrag && nextFrag.backtracked) {
-            logger.warn(`Already backtracked from fragment ${nextFrag.sn}, will not backtrack to fragment ${frag.sn}. Loading fragment ${nextFrag.sn}`);
-            frag = nextFrag;
+          if (nextSnFrag && nextSnFrag.backtracked) {
+            logger.warn(`Already backtracked from fragment ${nextSnFrag.sn}, will not backtrack to fragment ${fragNextLoad.sn}. Loading fragment ${nextSnFrag.sn}`);
+            fragNextLoad = nextSnFrag;
           } else {
             // If a fragment has dropped frames and it's in a same level/sequence, load the previous fragment to try and find the keyframe
             // Reset the dropped count now since it won't be reset until we parse the fragment again, which prevents infinite backtracking on the same segment
             logger.warn('Loaded fragment with dropped frames, backtracking 1 segment to find a keyframe');
-            frag.dropped = 0;
-            if (prevFrag) {
-              frag = prevFrag;
-              frag.backtracked = true;
+            fragNextLoad.dropped = 0;
+            if (prevSnFrag) {
+              fragNextLoad = prevSnFrag;
+              fragNextLoad.backtracked = true;
             } else if (curSNIdx) {
               // can't backtrack on very first fragment
-              frag = null;
+              fragNextLoad = null;
             }
           }
         }
       }
     }
-    return frag;
+
+    return fragNextLoad;
   }
 
   _loadKey (frag) {
@@ -420,7 +421,9 @@ class StreamController extends BaseStreamController {
     let fragState = this.fragmentTracker.getState(frag);
 
     this.fragCurrent = frag;
-    this.startFragRequested = true;
+    if (frag.sn !== 'initSegment') {
+      this.startFragRequested = true;
+    }
     // Don't update nextLoadPosition for fragments which are not buffered
     if (Number.isFinite(frag.sn) && !frag.bitrateTest) {
       this.nextLoadPosition = frag.start + frag.duration;
@@ -450,7 +453,7 @@ class StreamController extends BaseStreamController {
     if (this.state !== nextState) {
       const previousState = this.state;
       this._state = nextState;
-      logger.log(`main stream:${previousState}->${nextState}`);
+      logger.log(`main stream-controller: ${previousState}->${nextState}`);
       this.hls.trigger(Event.STREAM_STATE_TRANSITION, { previousState, nextState });
     }
   }
@@ -460,7 +463,7 @@ class StreamController extends BaseStreamController {
   }
 
   getBufferedFrag (position) {
-    return this.fragmentTracker.getBufferedFrag(position, PlaylistLoader.LevelType.MAIN);
+    return this.fragmentTracker.getBufferedFrag(position, PlaylistLevelType.MAIN);
   }
 
   get currentLevel () {
@@ -685,6 +688,7 @@ class StreamController extends BaseStreamController {
         }
       });
     }
+
     // remove video listeners
     if (media) {
       media.removeEventListener('seeking', this.onvseeking);
@@ -692,13 +696,16 @@ class StreamController extends BaseStreamController {
       media.removeEventListener('ended', this.onvended);
       this.onvseeking = this.onvseeked = this.onvended = null;
     }
+
+    this.fragmentTracker.removeAllFragments();
     this.media = this.mediaBuffer = null;
     this.loadedmetadata = false;
     this.stopLoad();
   }
 
   onMediaSeeked () {
-    const media = this.media, currentTime = media ? media.currentTime : undefined;
+    const media = this.media;
+    const currentTime = media ? media.currentTime : undefined;
     if (Number.isFinite(currentTime)) {
       logger.log(`media seeked to ${currentTime.toFixed(3)}`);
     }
@@ -736,6 +743,7 @@ class StreamController extends BaseStreamController {
       logger.log('both AAC/HE-AAC audio found in levels; declaring level codec as HE-AAC');
     }
 
+    this.altAudio = data.altAudio;
     this.levels = data.levels;
     this.startFragRequested = false;
     let config = this.config;
@@ -977,11 +985,11 @@ class StreamController extends BaseStreamController {
       }
 
       if (data.hasAudio === true) {
-        frag.addElementaryStream(Fragment.ElementaryStreamTypes.AUDIO);
+        frag.addElementaryStream(ElementaryStreamTypes.AUDIO);
       }
 
       if (data.hasVideo === true) {
-        frag.addElementaryStream(Fragment.ElementaryStreamTypes.VIDEO);
+        frag.addElementaryStream(ElementaryStreamTypes.VIDEO);
       }
 
       logger.log(`Parsed ${data.type},PTS:[${data.startPTS.toFixed(3)},${data.endPTS.toFixed(3)}],DTS:[${data.startDTS.toFixed(3)}/${data.endDTS.toFixed(3)}],nb:${data.nb},dropped:${data.dropped || 0}`);
@@ -1282,7 +1290,7 @@ class StreamController extends BaseStreamController {
     const media = this.mediaBuffer ? this.mediaBuffer : this.media;
     if (media) {
       // filter fragments potentially evicted from buffer. this is to avoid memleak on live streams
-      this.fragmentTracker.detectEvictedFragments(Fragment.ElementaryStreamTypes.VIDEO, media.buffered);
+      this.fragmentTracker.detectEvictedFragments(ElementaryStreamTypes.VIDEO, media.buffered);
     }
     // move to IDLE once flush complete. this should trigger new fragment loading
     this.state = State.IDLE;
@@ -1293,12 +1301,6 @@ class StreamController extends BaseStreamController {
   swapAudioCodec () {
     this.audioCodecSwap = !this.audioCodecSwap;
   }
-
-  computeLivePosition (sliding, levelDetails) {
-    let targetLatency = this.config.liveSyncDuration !== undefined ? this.config.liveSyncDuration : this.config.liveSyncDurationCount * levelDetails.targetduration;
-    return sliding + Math.max(0, levelDetails.totalduration - targetLatency);
-  }
-
   /**
    * Seeks to the set startPosition if not equal to the mediaElement's current time.
    * @private
@@ -1310,7 +1312,7 @@ class StreamController extends BaseStreamController {
     // at that stage, there should be only one buffered range, as we reach that code after first fragment has been buffered
     const startPosition = media.seeking ? currentTime : this.startPosition;
     // if currentTime not matching with expected startPosition or startPosition not buffered but close to first buffered
-    if (currentTime !== startPosition) {
+    if (currentTime !== startPosition && startPosition >= 0) {
       // if startPosition not buffered, let's seek to buffered.start(0)
       logger.log(`target start position not buffered, seek to buffered.start(0) ${startPosition} from current time ${currentTime} `);
       media.currentTime = startPosition;
