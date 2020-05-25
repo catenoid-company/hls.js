@@ -1,5 +1,6 @@
 module.exports = {
   'env': {
+    'browser': true,
     'commonjs': true,
     'es6': true
   },
@@ -73,6 +74,13 @@ module.exports = {
     'one-var': [
       1,
       'never'
+    ],
+
+    'no-restricted-globals': [2,
+      {
+        'name': 'SourceBuffer',
+        'message': 'Use `self.SourceBuffer`'
+      }
     ],
 
     'no-restricted-properties': [2,
